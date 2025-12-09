@@ -58,7 +58,7 @@ app.post('/upload', upload.single('file'), (req, res) => {
     }
 
     const time = `${formattedDate} ${incidentTime}`;
-    const county = row['COUNTY'] || 'N/A';
+    const county = row["DISTRICT"] || row["COUNTY"] || "N/A";
     const actor = row['ACTORS'] || 'N/A';
     const title = row['INCIDENT CATEGORY'] || 'N/A';
     const description = row['INCIDENT DESCRIPTION'] || 'N/A';
