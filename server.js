@@ -4,16 +4,19 @@ const multer = require('multer');
 const xlsx = require('xlsx');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const { initializeApp } = require('firebase/app');
 const { getDatabase, ref, set, push } = require('firebase/database');
 
 const app = express();
 app.use(cors());
-app.use(express.static('public')); // 🔹 Serve static assets like upload.html, images, etc.
+app.use(express.static('public'));
 
 const port = process.env.PORT || 3001;
 
-// 🔐 Firebase Config
+/* =======================
+   FIREBASE CONFIG
+======================= */
 const firebaseConfig = {
   apiKey: process.env.FIREBASE_API_KEY,
   authDomain: process.env.FIREBASE_AUTH_DOMAIN,
@@ -27,85 +30,116 @@ const firebaseConfig = {
 const appFB = initializeApp(firebaseConfig);
 const db = getDatabase(appFB);
 
-// 📂 File Upload Config
+/* =======================
+   ENSURE UPLOAD FOLDER
+======================= */
+const uploadDir = path.join(__dirname, 'upload');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
+
+/* =======================
+   MULTER CONFIG
+======================= */
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, './upload'),
+  destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => cb(null, file.originalname),
 });
 const upload = multer({ storage });
 
-// 🚀 Upload POST Endpoint
+/* =======================
+   UPLOAD ENDPOINT
+======================= */
 app.post('/upload', upload.single('file'), (req, res) => {
-  const workbook = xlsx.readFile(req.file.path);
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const data = xlsx.utils.sheet_to_json(sheet);
-
-  data.forEach((row) => {
-    const lat = parseFloat(row['LATITUDE']);
-    const lon = parseFloat(row['LONGITUDE']);
-    if (isNaN(lat) || isNaN(lon)) return;
-
-    // 📅 Format date and time
-    const incidentDate = row['INCIDENT DATE'];
-    const incidentTime = row['INCIDENT TIME'];
-    let formattedDate = 'Invalid Date';
-
-    if (typeof incidentDate === 'number') {
-      const dateObj = new Date(Math.round((incidentDate - 25569) * 86400 * 1000));
-      formattedDate = dateObj.toISOString().split('T')[0];
-    } else if (typeof incidentDate === 'string') {
-      formattedDate = incidentDate;
+  try {
+    if (!req.file) {
+      return res.status(400).send('No file uploaded');
     }
 
-    const time = `${formattedDate} ${incidentTime}`;
-    const county = row["DISTRICT"] || row["COUNTY"] || "N/A";
-    const actor = row['ACTORS'] || 'N/A';
-    const title = row['INCIDENT CATEGORY'] || 'N/A';
-    const description = row['INCIDENT DESCRIPTION'] || 'N/A';
+    const workbook = xlsx.readFile(req.file.path);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const data = xlsx.utils.sheet_to_json(sheet);
 
-    const newRef = push(ref(db, 'incidents'));
-    set(newRef, {
-      title,
-      description,
-      time,
-      lat,
-      lon,
-      county,
-      actor,
+    data.forEach((row) => {
+      const lat = parseFloat(row['LATITUDE']);
+      const lon = parseFloat(row['LONGITUDE']);
+      if (isNaN(lat) || isNaN(lon)) return;
+
+      // Date handling
+      const incidentDate = row['INCIDENT DATE'];
+      const incidentTime = row['INCIDENT TIME'] || '';
+      let formattedDate = 'Unknown Date';
+
+      if (typeof incidentDate === 'number') {
+        const dateObj = new Date(Math.round((incidentDate - 25569) * 86400 * 1000));
+        formattedDate = dateObj.toISOString().split('T')[0];
+      } else if (typeof incidentDate === 'string') {
+        formattedDate = incidentDate;
+      }
+
+      const time = `${formattedDate} ${incidentTime}`;
+
+      // ✅ DISTRICT (UGANDA STANDARD)
+      const district = row['DISTRICT'] || row['COUNTY'] || 'N/A';
+
+      const title = row['INCIDENT CATEGORY'] || 'N/A';
+      const description = row['INCIDENT DESCRIPTION'] || 'N/A';
+      const actor = row['ACTORS'] || 'N/A';
+
+      const newRef = push(ref(db, 'incidents'));
+      set(newRef, {
+        title,
+        description,
+        time,
+        lat,
+        lon,
+        district,
+        actor,
+        weight: 1,
+      });
     });
-  });
 
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>Upload Success</title>
-        <style>
-          body { font-family: Arial; text-align: center; padding: 40px; }
-          h1 { color: #004990; }
-          a.button {
-            background-color: #e21a23; color: white; padding: 12px 24px;
-            text-decoration: none; border-radius: 4px;
-            font-size: 16px;
-          }
-          a.button:hover { background-color: #b5000c; }
-        </style>
-      </head>
-      <body>
-        <h1>Upload Complete</h1>
-        <p>Excel data uploaded to Firebase successfully!</p>
-        <a class="button" href="/upload.html">Upload Another File</a>
-      </body>
-    </html>
-  `);
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Upload Complete</title>
+          <style>
+            body { font-family: Arial; text-align: center; padding: 40px; }
+            h1 { color: #004990; }
+            a.button {
+              background-color: #e21a23;
+              color: white;
+              padding: 12px 24px;
+              text-decoration: none;
+              border-radius: 4px;
+              font-size: 16px;
+            }
+          </style>
+        </head>
+        <body>
+          <h1>Upload Complete</h1>
+          <p>Excel data uploaded to Firebase successfully!</p>
+          <a class="button" href="/upload.html">Upload Another File</a>
+        </body>
+      </html>
+    `);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Internal Server Error');
+  }
 });
 
-// ✅ Serve upload form (from public/upload.html)
+/* =======================
+   SERVE UPLOAD FORM
+======================= */
 app.get('/upload', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'upload.html'));
 });
 
-// 🟢 Start server
+/* =======================
+   START SERVER
+======================= */
 app.listen(port, () => {
-  console.log(`✅ Server running at http://localhost:${port}`);
+  console.log(`✅ Server running on port ${port}`);
 });
